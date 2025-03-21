@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Office Timer</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 20px;
+        text-align: center;
+      }
+      h1 {
+        color: #333;
+      }
+      #elapsed-time {
+        font-size: 24px;
+        font-weight: bold;
+        color: #0066cc;
+      }
+      button {
+        background-color: #4caf50;
+        border: none;
+        color: white;
+        padding: 10px 20px;
+        text-align: center;
+        text-decoration: none;
+        display: inline-block;
+        font-size: 16px;
+        margin: 20px 10px;
+        cursor: pointer;
+        border-radius: 5px;
+      }
+      button:hover {
+        background-color: #45a049;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Office Timer</h1>
+    <p>Elapsed Time: <span id="elapsed-time">{{ elapsed_time }}</span></p>
+    <div
+      hx-get="/status"
+      hx-trigger="every 1s"
+      hx-target="#elapsed-time"
+      hx-swap="innerHTML"
+    ></div>
+
+    <div>
+      {% if is_new_day %}
+      <button hx-post="/start" hx-target="body" hx-swap="outerHTML">
+        Start Day
+      </button>
+      {% elif is_running %}
+      <button hx-post="/pause" hx-target="body" hx-swap="outerHTML">
+        Pause
+      </button>
+      {% else %}
+      <button hx-post="/resume" hx-target="body" hx-swap="outerHTML">
+        Resume
+      </button>
+      {% endif %}
+    </div>
+  </body>
+</html>
