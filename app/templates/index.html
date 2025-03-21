@@ -8,24 +8,53 @@
     <style>
       body {
         font-family: Arial, sans-serif;
-        max-width: 600px;
+        max-width: 800px;
         margin: 0 auto;
         padding: 20px;
         text-align: center;
+        background-color: #f5f5f5;
+      }
+      .container {
+        background-color: white;
+        border-radius: 10px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        padding: 20px;
+        margin-bottom: 20px;
       }
       h1 {
         color: #333;
+        margin-top: 0;
+      }
+      .current-date {
+        font-size: 18px;
+        color: #555;
+        margin-bottom: 15px;
+      }
+      .timer-display {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        margin: 20px 0;
       }
       #elapsed-time {
-        font-size: 24px;
+        font-size: 48px;
         font-weight: bold;
         color: #0066cc;
+        background-color: #f0f8ff;
+        padding: 10px 20px;
+        border-radius: 8px;
+        border: 1px solid #d0e3f7;
+      }
+      .timer-label {
+        font-size: 16px;
+        color: #666;
+        margin-top: 5px;
       }
       button {
         background-color: #4caf50;
         border: none;
         color: white;
-        padding: 10px 20px;
+        padding: 12px 24px;
         text-align: center;
         text-decoration: none;
         display: inline-block;
@@ -33,36 +62,158 @@
         margin: 20px 10px;
         cursor: pointer;
         border-radius: 5px;
+        transition: background-color 0.3s;
       }
       button:hover {
         background-color: #45a049;
       }
+      button.pause {
+        background-color: #f39c12;
+      }
+      button.pause:hover {
+        background-color: #e67e22;
+      }
+      .history-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 20px;
+        text-align: left;
+      }
+      .history-table th {
+        background-color: #f2f2f2;
+        padding: 10px;
+        border-bottom: 2px solid #ddd;
+      }
+      .history-table td {
+        padding: 10px;
+        border-bottom: 1px solid #ddd;
+      }
+      .history-table tr:last-child td {
+        border-bottom: none;
+      }
+      .history-table tr:nth-child(even) {
+        background-color: #f9f9f9;
+      }
+      .history-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      .today-status {
+        display: flex;
+        justify-content: space-between;
+        background-color: #e8f4fd;
+        padding: 15px;
+        border-radius: 8px;
+        margin: 15px 0;
+      }
+      .status-item {
+        display: flex;
+        flex-direction: column;
+      }
+      .status-label {
+        font-size: 14px;
+        color: #666;
+      }
+      .status-value {
+        font-size: 18px;
+        font-weight: bold;
+        color: #333;
+      }
     </style>
   </head>
   <body>
-    <h1>Office Timer</h1>
-    <p>Elapsed Time: <span id="elapsed-time">{{ elapsed_time }}</span></p>
-    <div
-      hx-get="/status"
-      hx-trigger="every 1s"
-      hx-target="#elapsed-time"
-      hx-swap="innerHTML"
-    ></div>
+    <div class="container">
+      <h1>Office Timer</h1>
+      <div
+        class="current-date"
+        hx-get="/current-datetime"
+        hx-trigger="every 1s"
+        hx-swap="innerHTML"
+      >
+        {{ current_datetime }}
+      </div>
 
-    <div>
-      {% if is_new_day %}
-      <button hx-post="/start" hx-target="body" hx-swap="outerHTML">
-        Start Day
-      </button>
-      {% elif is_running %}
-      <button hx-post="/pause" hx-target="body" hx-swap="outerHTML">
-        Pause
-      </button>
-      {% else %}
-      <button hx-post="/resume" hx-target="body" hx-swap="outerHTML">
-        Resume
-      </button>
-      {% endif %}
+      <div class="today-status">
+        <div class="status-item">
+          <span class="status-label">Status</span>
+          <span class="status-value"
+            >{{ "Active" if is_running else "Paused" }}</span
+          >
+        </div>
+        <div class="status-item">
+          <span class="status-label">Start Time</span>
+          <span class="status-value">{{ first_in_time }}</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Last Activity</span>
+          <span class="status-value">{{ last_activity_time }}</span>
+        </div>
+      </div>
+
+      <div class="timer-display">
+        <div>
+          <div id="elapsed-time">{{ elapsed_time }}</div>
+          <div class="timer-label">Total Hours Today</div>
+        </div>
+      </div>
+
+      <div
+        hx-get="/status"
+        hx-trigger="every 1s"
+        hx-target="#elapsed-time"
+        hx-swap="innerHTML"
+      ></div>
+
+      <div>
+        {% if is_new_day %}
+        <button hx-post="/start" hx-target="body" hx-swap="outerHTML">
+          Start Day
+        </button>
+        {% elif is_running %}
+        <button
+          class="pause"
+          hx-post="/pause"
+          hx-target="body"
+          hx-swap="outerHTML"
+        >
+          Pause
+        </button>
+        {% else %}
+        <button hx-post="/resume" hx-target="body" hx-swap="outerHTML">
+          Resume
+        </button>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="container">
+      <div class="history-header">
+        <h2>7-Day History</h2>
+      </div>
+      <table class="history-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Day</th>
+            <th>First IN</th>
+            <th>Last OUT</th>
+            <th>Total Hours</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for record in history_records %}
+          <tr>
+            <td>{{ record.date }}</td>
+            <td>{{ record.day }}</td>
+            <td>{{ record.first_in }}</td>
+            <td>{{ record.last_out }}</td>
+            <td>{{ record.total_hours }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
   </body>
 </html>

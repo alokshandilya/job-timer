@@ -4,11 +4,20 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pytz import UTC, timezone  # For handling timezones
-from sqlalchemy import Boolean, Column, Date, DateTime, Integer, Interval, create_engine
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    Integer,
+    Interval,
+    create_engine,
+    desc,
+)
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.config import settings
+from .config import settings
 
 # Database setup
 DATABASE_URL = f"postgresql://{settings.database_username}:{settings.database_password}@{settings.database_hostname}:{settings.database_port}/{settings.database_name}?sslmode=require"
@@ -27,7 +36,9 @@ class Timer(Base):
     resume_time = Column(DateTime)
     total_elapsed = Column(Interval, default=timedelta())
     is_running = Column(Boolean, default=False)
-    date = Column(Date)  # New column to track the date
+    date = Column(Date)  # To track the date
+    first_in_time = Column(DateTime)  # First IN time of the day
+    last_out_time = Column(DateTime)  # Last OUT time of the day
 
 
 Base.metadata.create_all(bind=engine)
@@ -74,56 +85,175 @@ def normalize_datetime(dt):
     return dt.astimezone(IST)
 
 
-# Helper function to get the current timer state
+# Helper function to format datetime for display
+def format_time(dt):
+    if dt is None:
+        return "N/A"
+    # Normalize to ensure consistent timezone
+    dt = normalize_datetime(dt)
+    return dt.strftime("%I:%M %p")  # 12-hour format with AM/PM
+
+
+# Helper function to format date for display
+def format_date(dt):
+    if dt is None:
+        return "N/A"
+    return dt.strftime("%d-%b-%Y")  # Format: 21-Mar-2023
+
+
+# Helper function to get day of week
+def get_day_of_week(dt):
+    if dt is None:
+        return "N/A"
+    return dt.strftime("%A")  # Full day name
+
+
+# Helper function to format timedelta for display
+def format_timedelta(td):
+    if td is None:
+        return "00:00:00"
+
+    total_seconds = td.total_seconds()
+    hours, remainder = divmod(int(total_seconds), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02}:{minutes:02}:{seconds:02}"
+
+
 def get_timer_state(db: Session):
     # Get current date in IST
     current_date_ist = get_current_date()
 
-    # Try to get today's timer first
-    timer = db.query(Timer).filter(Timer.date == current_date_ist).first()
+    try:
+        # Try to get today's timer first
+        timer = db.query(Timer).filter(Timer.date == current_date_ist).first()
 
-    # If no timer for today exists, get the most recent timer
-    if not timer:
-        timer = db.query(Timer).order_by(Timer.date.desc()).first()
+        # If no timer for today exists, get the most recent timer
+        if not timer:
+            timer = db.query(Timer).order_by(Timer.date.desc()).first()
 
-        # If there's a previous timer but it's not from today, we need a new one
-        if timer and timer.date != current_date_ist:
-            timer = Timer(
-                is_running=False,
-                total_elapsed=timedelta(),
-                date=current_date_ist,
-                start_time=None,
-                pause_time=None,
-                resume_time=None,
-            )
-            db.add(timer)
-            db.commit()
-            db.refresh(timer)
-        # If no timer exists at all, create a new one
-        elif not timer:
-            timer = Timer(
-                is_running=False,
-                total_elapsed=timedelta(),
-                date=current_date_ist,
-                start_time=None,
-                pause_time=None,
-                resume_time=None,
-            )
-            db.add(timer)
-            db.commit()
-            db.refresh(timer)
+            # If there's a previous timer but it's not from today, we need a new one
+            if timer and timer.date != current_date_ist:
+                timer = Timer(
+                    is_running=False,
+                    total_elapsed=timedelta(),
+                    date=current_date_ist,
+                    start_time=None,
+                    pause_time=None,
+                    resume_time=None,
+                )
+                db.add(timer)
+                db.commit()
+                db.refresh(timer)
+            # If no timer exists at all, create a new one
+            elif not timer:
+                timer = Timer(
+                    is_running=False,
+                    total_elapsed=timedelta(),
+                    date=current_date_ist,
+                    start_time=None,
+                    pause_time=None,
+                    resume_time=None,
+                )
+                db.add(timer)
+                db.commit()
+                db.refresh(timer)
 
-    # Normalize datetime fields for consistent timezone handling
-    timer.start_time = normalize_datetime(timer.start_time)
-    timer.pause_time = normalize_datetime(timer.pause_time)
-    timer.resume_time = normalize_datetime(timer.resume_time)
+        # Normalize datetime fields for consistent timezone handling
+        timer.start_time = normalize_datetime(timer.start_time)
+        timer.pause_time = normalize_datetime(timer.pause_time)
+        timer.resume_time = normalize_datetime(timer.resume_time)
 
-    return timer
+        # Handle case where first_in_time and last_out_time columns might not exist yet
+        try:
+            timer.first_in_time = normalize_datetime(timer.first_in_time)
+            timer.last_out_time = normalize_datetime(timer.last_out_time)
+        except AttributeError:
+            # If the columns don't exist yet, we'll handle that in the template
+            pass
+
+        return timer
+
+    except Exception as e:
+        # Log the error and return a minimal timer object to prevent crashing
+        print(f"Error in get_timer_state: {e}")
+        return Timer(
+            is_running=False,
+            total_elapsed=timedelta(),
+            date=current_date_ist,
+            start_time=None,
+            pause_time=None,
+            resume_time=None,
+        )
+
+
+# Helper function to get history records for the past 7 days
+def get_history_records(db: Session):
+    current_date = get_current_date()
+    start_date = current_date - timedelta(days=6)  # Last 7 days including today
+
+    records = (
+        db.query(Timer)
+        .filter(Timer.date >= start_date)
+        .order_by(desc(Timer.date))
+        .all()
+    )
+
+    formatted_records = []
+    for record in records:
+        # Calculate total hours for completed days
+        if record.date == current_date:
+            # For today, use the current elapsed time
+            timer = get_timer_state(db)
+            total_elapsed = timer.total_elapsed
+
+            # If timer is running, add current session time
+            if timer.is_running and timer.start_time:
+                current_time = get_current_time()
+                current_elapsed = current_time - timer.start_time
+                total_elapsed += current_elapsed
+        else:
+            # For past days, use the recorded total_elapsed
+            total_elapsed = record.total_elapsed
+
+        formatted_records.append(
+            {
+                "date": format_date(record.date),
+                "day": get_day_of_week(record.date),
+                "first_in": format_time(record.first_in_time)
+                if record.first_in_time
+                else "N/A",
+                "last_out": format_time(record.last_out_time)
+                if record.last_out_time
+                else "N/A",
+                "total_hours": format_timedelta(total_elapsed),
+            }
+        )
+
+    # Pad with empty days if we have fewer than 7 days of records
+    while len(formatted_records) < 7:
+        formatted_records.append(
+            {
+                "date": "N/A",
+                "day": "N/A",
+                "first_in": "N/A",
+                "last_out": "N/A",
+                "total_hours": "00:00:00",
+            }
+        )
+
+    return formatted_records
+
+
+@app.get("/current-datetime")
+async def get_current_datetime():
+    now = get_current_time()
+    return now.strftime("%A, %d %B %Y - %I:%M:%S %p")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request, db: Session = Depends(get_db)):
     timer = get_timer_state(db)
+    current_time = get_current_time()
 
     # Format elapsed time to be more readable (HH:MM:SS)
     total_seconds = timer.total_elapsed.total_seconds()
@@ -137,8 +267,6 @@ async def read_root(request: Request, db: Session = Depends(get_db)):
 
     # Calculate current elapsed time if timer is running
     if timer.is_running and timer.start_time:
-        current_time = get_current_time()
-        # Both datetimes are now normalized to IST
         current_elapsed = current_time - timer.start_time
         total_seconds = (
             timer.total_elapsed.total_seconds() + current_elapsed.total_seconds()
@@ -147,6 +275,28 @@ async def read_root(request: Request, db: Session = Depends(get_db)):
         minutes, seconds = divmod(remainder, 60)
         elapsed_time = f"{hours:02}:{minutes:02}:{seconds:02}"
 
+    # Get history records - safely handle in case of column missing errors
+    try:
+        history_records = get_history_records(db)
+    except Exception as e:
+        print(f"Error getting history records: {e}")
+        history_records = []
+
+    # Format current datetime for display
+    current_datetime = current_time.strftime("%A, %d %B %Y - %I:%M:%S %p")
+
+    # Safely get first_in_time and last_activity_time with fallbacks
+    try:
+        first_in_time = format_time(getattr(timer, "first_in_time", None))
+    except:
+        first_in_time = "N/A"
+
+    try:
+        last_out = getattr(timer, "last_out_time", None)
+        last_activity_time = format_time(last_out if last_out else timer.start_time)
+    except:
+        last_activity_time = format_time(timer.start_time)
+
     return templates.TemplateResponse(
         "index.html",
         {
@@ -154,6 +304,10 @@ async def read_root(request: Request, db: Session = Depends(get_db)):
             "is_running": timer.is_running,
             "elapsed_time": elapsed_time,
             "is_new_day": is_new_day,
+            "history_records": history_records,
+            "current_datetime": current_datetime,
+            "first_in_time": first_in_time,
+            "last_activity_time": last_activity_time,
         },
     )
 
@@ -173,10 +327,15 @@ async def start_timer(request: Request, db: Session = Depends(get_db)):
         now = get_current_time()
         timer.start_time = now
         timer.is_running = True
+
+        # Record first IN time of the day
+        timer.first_in_time = now
+
         db.commit()
         db.refresh(timer)
         # Normalize after DB refresh
         timer.start_time = normalize_datetime(timer.start_time)
+        timer.first_in_time = normalize_datetime(timer.first_in_time)
     else:
         raise HTTPException(status_code=400, detail="Timer has already started today.")
 
@@ -202,12 +361,17 @@ async def pause_timer(request: Request, db: Session = Depends(get_db)):
 
     timer.pause_time = now
     timer.is_running = False
+
+    # Update last OUT time
+    timer.last_out_time = now
+
     db.commit()
     db.refresh(timer)
 
     # Normalize after DB refresh
     timer.pause_time = normalize_datetime(timer.pause_time)
     timer.start_time = normalize_datetime(timer.start_time)
+    timer.last_out_time = normalize_datetime(timer.last_out_time)
 
     # Return the updated page
     return await read_root(request, db)
